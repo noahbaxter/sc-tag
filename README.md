@@ -1,2 +1,2 @@
 # sc-tag
-A tool for ripping metadata from soundcloud for an mp3 
+A tool for ripping the metadata for an mp3 from soundcloud 
