@@ -4,7 +4,6 @@ import sys
 import time
 
 import eyed3
-import requests
 import urllib
 
 from selenium import webdriver
