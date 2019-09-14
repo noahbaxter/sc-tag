@@ -1,3 +1,4 @@
+import html
 import os
 import sys
 import time
@@ -5,22 +6,18 @@ import time
 import eyed3
 import requests
 import urllib
-import urllib.parse
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 
-# credit to OWADVL and sbha for this part
 def scroll (driver):
-
+    # stolen from OWADVL and sbha on stack exchange
     SCROLL_PAUSE_TIME = 0.5
     last_height = driver.execute_script("return document.body.scrollHeight")
 
     while True:
         # Scroll down to bottom
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-
-        # Wait to load page
         time.sleep(SCROLL_PAUSE_TIME)
 
         # Calculate new scroll height and compare with last scroll height
@@ -29,34 +26,13 @@ def scroll (driver):
             break
         last_height = new_height
 
-def clean_query(query):
+def parse_query(query):
     q = query.replace(" my-free-mp3s.com", "")
     q = urllib.parse.quote(q)
 
     return q
 
-if __name__ == "__main__":
-
-    if len(sys.argv) != 2:
-        exit(1) # bad arguments
-    elif not os.path.isfile(sys.argv[1]):
-        exit(1) # bad file
-
-    audiofile = eyed3.load(sys.argv[1])
-    query = sys.argv[1].split('/')[-1]
-    query = clean_query(query)
-
-    # prepare the option for the chrome driver
-    options = webdriver.ChromeOptions()
-    options.add_argument('headless')
-
-    # start chrome browser
-    driver = webdriver.Chrome(options=options)
-    driver.get("https://soundcloud.com/search?q=" + query)
-    scroll(driver)
-
-    # Grab all results
-    tracks = driver.find_elements(By.XPATH, "//li[@class='searchList__item']/div/div")
+def find_best_track(tracks, query):
 
     # track with most matching words in title
     best_guess = None
@@ -74,31 +50,89 @@ if __name__ == "__main__":
             global_matches = local_matches
             best_guess = track
 
-    if not best_guess:
-        exit(1)
+    return best_guess
 
+def embed_artwork(audiofile, track):
     # Grab url for artwork
-    artwork = best_guess.find_element(By.XPATH, "//a[@class='sound__coverArt']/div/span")
+    artwork = track.find_element(By.XPATH, "//a[@class='sound__coverArt']/div/span")
     artwork_url = artwork.get_attribute('style').split('background-image: url("')[1].split('");')[0]
 
-    if not '-t500x500.jpg' in artwork_url:
-        pass
-        # do something
-        # artwork_url = artwork_url.split('-t')[0] + '-t500x500.jpg'
-
-    print(artwork_url)
+    # download and embed artwork
     urllib.request.urlretrieve(artwork_url,"tmp.jpg")
-
     audiofile.tag.images.set(3, open('tmp.jpg','rb').read(), 'image/jpeg')
-    audiofile.tag.save()
-    print(audiofile)
+    os.remove("tmp.jpg")
 
-    # print(artwork.get_attribute("style"))
+def embed_date(audiofile, track):
+    # grab date
+    date = track.find_element(By.XPATH, "//div[@class='soundTitle__uploadTime']/time")
+    year = date.get_attribute('datetime').split('-')[0]
+    audiofile.tag.recording_date = year
 
-    # print(global_matches)
-    # print(best_guess.get_attribute("aria-label"))
+def embed_artist(audiofile, track):
+    title  = track.find_element(By.XPATH, "//div[@class='soundTitle__usernameTitleContainer']/a/span")
+    artist = track.find_element(By.XPATH, "//div[@class='soundTitle__usernameTitleContainer']/div/a/span")
+    t = html.unescape(title.get_attribute("innerHTML")).split(' - ')[0]
+    a = html.unescape(artist.get_attribute("innerHTML"))
+    if a in t:
+        audiofile.tag.artist = t
+    else:
+        audiofile.tag.artist = a
+
+def embed_title(audiofile, track):
+    title  = track.find_element(By.XPATH, "//div[@class='soundTitle__usernameTitleContainer']/a/span")
+    t = html.unescape(title.get_attribute("innerHTML").split(' - ')[-1])
+    audiofile.tag.title = t
+
+def print_metadata(audiofile):
+    print(audiofile.tag.title)
+    print(audiofile.tag.artist)
+    print(audiofile.tag.album)
+    print(audiofile.tag.album_artist)
+    print(audiofile.tag.genre)
+    print(audiofile.tag.recording_date)
+
+def main(path):
+    audiofile = eyed3.load(path)
+    query = path.split('/')[-1]
+    query = parse_query(query)
+
+    # prepare the option for the chrome driver
+    options = webdriver.ChromeOptions()
+    options.add_argument('headless')
+
+    # start chrome browser
+    driver = webdriver.Chrome(options=options)
+    driver.get("https://soundcloud.com/search?q=" + query)
+    scroll(driver)
+
+    # Grab all results
+    tracks = driver.find_elements(By.XPATH, "//li[@class='searchList__item']/div/div")
+    track = find_best_track(tracks, query)
+    if track:
+        embed_artwork(audiofile, track)
+        embed_date(audiofile, track)
+        embed_artist(audiofile, track)
+        embed_title(audiofile, track)
+        audiofile.tag.save()
+    else:
+        print('fail:', path)
 
     driver.quit()
 
-    # p_elements = driver.find_elements("xpath", "//*[@class='sound__coverArt']")
-    # print(p_elements)
+
+if __name__ == "__main__":
+
+    if len(sys.argv) != 2:
+        exit(1) # bad arguments
+    path = sys.argv[1]
+
+    # single file
+    if os.path.isfile(path):
+        main(path)
+
+    # directory
+    elif os.path.isdir(path):
+        for file in os.listdir(path):
+            if file.endswith(".mp3"):
+                print(os.path.join(path, file))
+                main(os.path.join(path, file))
